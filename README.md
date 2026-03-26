@@ -1,6 +1,6 @@
-# Codex iTerm Pane Labels
+# LLM iTerm Pane Labels
 
-Show a live task summary for each Codex or Claude Code pane in iTerm2.
+Show a live task summary for each AI coding pane in iTerm2.
 
 This setup does three things:
 
@@ -46,7 +46,7 @@ From this repo:
 source ~/.zshrc
 ```
 
-If Codex or Claude is already running in a pane, exit that process and start it again after reloading `~/.zshrc`.
+If an agent is already running in a pane, exit that process and start it again after reloading `~/.zshrc`.
 
 ## Manual Install
 
@@ -64,11 +64,11 @@ chmod +x ~/.codex/codex_pane_summary.py
 5. Add this block to `~/.zshrc`:
 
 ```zsh
-# >>> codex iterm pane labels >>>
+# >>> llm iterm pane labels >>>
 if [ -f "$HOME/.codex/iterm-pane-labels.zsh" ]; then
   source "$HOME/.codex/iterm-pane-labels.zsh"
 fi
-# <<< codex iterm pane labels <<<
+# <<< llm iterm pane labels <<<
 ```
 
 6. Reload your shell:
@@ -81,12 +81,12 @@ source ~/.zshrc
 
 ## iTerm2 Setup
 
-Use the same iTerm2 profile you run Codex or Claude in.
+Use the same iTerm2 profile you run your agent in.
 
 ### Badge
 
 1. Open `iTerm2 > Settings > Profiles`.
-2. Select your Codex profile.
+2. Select the profile you use for agent panes.
 3. Open `General`.
 4. Set `Badge` to:
 
@@ -140,7 +140,7 @@ That way each pane has:
 When you run `codex`, `claude`, or `cc` in a pane:
 
 1. the `zsh` wrapper starts a small background watcher for that tty
-2. the watcher finds the matching Codex or Claude session file
+2. the watcher finds the matching session file for the active agent
 3. it summarizes recent user asks and assistant progress
 4. it writes the result back to iTerm for that pane only
 
@@ -192,6 +192,6 @@ Delete:
 Then remove this block from `~/.zshrc`:
 
 ```text
-# >>> codex iterm pane labels >>>
-# <<< codex iterm pane labels <<<
+# >>> llm iterm pane labels >>>
+# <<< llm iterm pane labels <<<
 ```

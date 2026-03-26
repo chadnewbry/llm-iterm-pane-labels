@@ -7,8 +7,8 @@ CODEX_HOME="$HOME/.codex"
 TARGET_SCRIPT="$CODEX_HOME/codex_pane_summary.py"
 TARGET_HOOK="$CODEX_HOME/iterm-pane-labels.zsh"
 ZSHRC="$HOME/.zshrc"
-START_MARKER="# >>> codex iterm pane labels >>>"
-END_MARKER="# <<< codex iterm pane labels <<<"
+START_MARKER="# >>> llm iterm pane labels >>>"
+END_MARKER="# <<< llm iterm pane labels <<<"
 
 mkdir -p "$CODEX_HOME"
 
