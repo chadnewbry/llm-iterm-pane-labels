@@ -1,11 +1,11 @@
 # Codex iTerm Pane Labels
 
-Show a live task summary for each Codex pane in iTerm2.
+Show a live task summary for each Codex or Claude Code pane in iTerm2.
 
 This setup does three things:
 
-- wraps `codex` in `zsh` so each pane starts a watcher
-- reads the active Codex session for that pane
+- wraps `codex` and `claude` in `zsh` so each pane starts a watcher
+- reads the active Codex or Claude session for that pane
 - writes a short task summary into iTerm's title channels and `user.task`
 
 ## What You Get
@@ -22,13 +22,17 @@ The label is written to:
 - the iTerm status bar via `\(user.task)`
 - the shell-driven title channels (`OSC 0`, `OSC 1`, `OSC 2`) that iTerm can use for pane, tab, and window titles
 
+You can mix tools across panes. One pane can run Codex while another runs Claude Code, and each pane keeps its own label updated from the agent active in that tty.
+
 ## Requirements
 
 - macOS
 - iTerm2
 - `zsh`
 - `python3`
-- Codex installed and writing sessions under `~/.codex/sessions`
+- Codex and/or Claude Code installed
+- Codex sessions under `~/.codex/sessions`
+- Claude Code sessions under `~/.claude/projects`
 - `OPENAI_API_KEY` if you want LLM-generated summaries
 
 Without `OPENAI_API_KEY`, the pane label still works, but it falls back to a heuristic summary.
@@ -42,7 +46,7 @@ From this repo:
 source ~/.zshrc
 ```
 
-If Codex is already running in a pane, exit that Codex process and start it again after reloading `~/.zshrc`.
+If Codex or Claude is already running in a pane, exit that process and start it again after reloading `~/.zshrc`.
 
 ## Manual Install
 
@@ -73,11 +77,11 @@ fi
 source ~/.zshrc
 ```
 
-7. Restart any already-running `codex` process in open panes.
+7. Restart any already-running `codex` or `claude` process in open panes.
 
 ## iTerm2 Setup
 
-Use the same iTerm2 profile you run Codex in.
+Use the same iTerm2 profile you run Codex or Claude in.
 
 ### Badge
 
@@ -133,14 +137,28 @@ That way each pane has:
 
 ## How It Works
 
-When you run `codex` in a pane:
+When you run `codex`, `claude`, or `cc` in a pane:
 
 1. the `zsh` wrapper starts a small background watcher for that tty
-2. the watcher finds the matching Codex session file
+2. the watcher finds the matching Codex or Claude session file
 3. it summarizes recent user asks and assistant progress
 4. it writes the result back to iTerm for that pane only
 
-The watcher polls every 4 seconds while `codex` is running in that pane.
+The watcher runs while the agent is active in that pane.
+
+By default, the watcher now:
+
+- polls the session state every 15 seconds
+- only asks the LLM for a new summary after 5 new user prompts
+- or after 5 minutes have passed since the last LLM summary
+
+You can tune that with:
+
+```zsh
+export CODEX_PANE_SUMMARY_POLL_INTERVAL=15
+export CODEX_PANE_SUMMARY_MIN_PROMPTS=5
+export CODEX_PANE_SUMMARY_MIN_SECONDS=300
+```
 
 ## Files Installed
 

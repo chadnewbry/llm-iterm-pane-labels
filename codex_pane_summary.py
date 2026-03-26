@@ -16,6 +16,8 @@ from pathlib import Path
 
 CODEX_HOME = Path.home() / ".codex"
 SESSIONS_DIR = CODEX_HOME / "sessions"
+CLAUDE_HOME = Path.home() / ".claude"
+CLAUDE_PROJECTS_DIR = CLAUDE_HOME / "projects"
 CACHE_DIR = CODEX_HOME / "pane_summary_cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
@@ -48,30 +50,23 @@ def session_matches(session_cwd: str, target_cwd: Path) -> bool:
     except Exception:
         return False
 
-    return session_path == target_path or session_path in target_path.parents or target_path in session_path.parents
+    return git_root(session_path) == git_root(target_path)
 
 
-def find_latest_session(cwd: Path) -> Path | None:
-    if not SESSIONS_DIR.exists():
+def find_latest_matching_jsonl(root: Path, cwd: Path, provider: str) -> Path | None:
+    if not root.exists():
         return None
 
     target = git_root(cwd)
     best_path = None
     best_mtime = -1.0
 
-    for path in SESSIONS_DIR.rglob("*.jsonl"):
+    for path in root.rglob("*.jsonl"):
         try:
             stat = path.stat()
             if time.time() - stat.st_mtime > 60 * 60 * 24:
                 continue
-            with path.open("r", encoding="utf-8") as handle:
-                first_line = handle.readline()
-            if not first_line:
-                continue
-            first = json.loads(first_line)
-            if first.get("type") != "session_meta":
-                continue
-            session_cwd = first.get("payload", {}).get("cwd", "")
+            session_cwd = extract_session_cwd(path, provider)
             if not session_matches(session_cwd, target):
                 continue
             if stat.st_mtime > best_mtime:
@@ -81,6 +76,24 @@ def find_latest_session(cwd: Path) -> Path | None:
             continue
 
     return best_path
+
+
+def find_latest_session(cwd: Path) -> tuple[str, Path] | None:
+    candidates: list[tuple[float, str, Path]] = []
+
+    codex_path = find_latest_matching_jsonl(SESSIONS_DIR, cwd, "codex")
+    if codex_path:
+        candidates.append((codex_path.stat().st_mtime, "codex", codex_path))
+
+    claude_path = find_latest_matching_jsonl(CLAUDE_PROJECTS_DIR, cwd, "claude")
+    if claude_path:
+        candidates.append((claude_path.stat().st_mtime, "claude", claude_path))
+
+    if not candidates:
+        return None
+
+    _, provider, path = max(candidates, key=lambda item: item[0])
+    return provider, path
 
 
 def extract_text_parts(content: list[dict]) -> list[str]:
@@ -127,7 +140,64 @@ def load_session_context(session_path: Path) -> dict:
     return {
         "users": users[-4:],
         "assistant": assistant[-2:],
+        "user_count": len(users),
     }
+
+
+def load_claude_session_context(session_path: Path) -> dict:
+    users: list[str] = []
+    assistant: list[str] = []
+
+    with session_path.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            try:
+                event = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+
+            event_type = event.get("type")
+            if event_type == "user":
+                message = event.get("message", {})
+                content = message.get("content")
+                text = extract_claude_text(content)
+                if text:
+                    users.append(clean_text(text))
+                continue
+
+            if event_type == "assistant":
+                message = event.get("message", {})
+                content = message.get("content")
+                text = extract_claude_text(content, assistant_only=True)
+                if text:
+                    assistant.append(clean_text(text))
+
+    return {
+        "users": users[-4:],
+        "assistant": assistant[-2:],
+        "user_count": len(users),
+    }
+
+
+def extract_claude_text(content, assistant_only: bool = False) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+
+    parts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "text":
+            text = item.get("text")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+        elif not assistant_only and item_type == "tool_result":
+            text = item.get("content")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return " ".join(parts).strip()
 
 
 def clean_text(text: str) -> str:
@@ -155,6 +225,26 @@ def context_hash(cwd: Path, context: dict, session_path: Path | None) -> str:
         "assistant": context.get("assistant", []),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def extract_session_cwd(session_path: Path, provider: str) -> str:
+    try:
+        with session_path.open("r", encoding="utf-8") as handle:
+            for _ in range(20):
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                event = json.loads(raw_line)
+                if provider == "codex":
+                    if event.get("type") == "session_meta":
+                        return event.get("payload", {}).get("cwd", "")
+                elif provider == "claude":
+                    cwd = event.get("cwd")
+                    if isinstance(cwd, str) and cwd:
+                        return cwd
+    except Exception:
+        return ""
+    return ""
 
 
 def cache_path(cwd: Path) -> Path:
@@ -197,7 +287,7 @@ def write_tty_cache(tty_path: str, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def find_codex_pid_for_tty(tty_path: str) -> int | None:
+def find_llm_process_for_tty(tty_path: str) -> tuple[str, int] | None:
     tty_name = Path(tty_path).name
     try:
         result = subprocess.run(
@@ -209,7 +299,7 @@ def find_codex_pid_for_tty(tty_path: str) -> int | None:
     except Exception:
         return None
 
-    candidates: list[int] = []
+    candidates: list[tuple[int, str]] = []
     for line in result.stdout.splitlines():
         parts = line.strip().split(None, 2)
         if len(parts) < 3:
@@ -217,16 +307,25 @@ def find_codex_pid_for_tty(tty_path: str) -> int | None:
         pid_text, tty_text, command = parts
         if tty_text != tty_name:
             continue
+        provider = None
         if re.search(r"(^|/)\bcodex\b", command) or re.search(r"\bcodex\b", command):
-            try:
-                candidates.append(int(pid_text))
-            except ValueError:
-                continue
+            provider = "codex"
+        elif re.search(r"(^|/)\bclaude\b", command) or re.search(r"\bclaude\b", command):
+            provider = "claude"
+        if provider is None:
+            continue
+        try:
+            candidates.append((int(pid_text), provider))
+        except ValueError:
+            continue
 
-    return max(candidates) if candidates else None
+    if not candidates:
+        return None
+    pid, provider = max(candidates, key=lambda item: item[0])
+    return provider, pid
 
 
-def session_path_from_pid(pid: int) -> Path | None:
+def session_path_from_pid(pid: int, provider: str) -> Path | None:
     try:
         result = subprocess.run(
             ["lsof", "-p", str(pid)],
@@ -238,7 +337,10 @@ def session_path_from_pid(pid: int) -> Path | None:
         return None
 
     for line in result.stdout.splitlines():
-        match = re.search(r"(/Users/.+?/\.codex/sessions/.+?\.jsonl)\s*$", line)
+        if provider == "codex":
+            match = re.search(r"(/Users/.+?/\.codex/sessions/.+?\.jsonl)\s*$", line)
+        else:
+            match = re.search(r"(/Users/.+?/\.claude/projects/.+?\.jsonl)\s*$", line)
         if match:
             return Path(match.group(1))
     return None
@@ -304,8 +406,11 @@ def generate_llm_summary(cwd: Path, context: dict) -> str | None:
 
 def resolve_summary(cwd: Path, quick: bool, ttl_seconds: int, tty_path: str | None = None) -> str:
     session_path = None
+    provider = None
     tty_state = read_tty_cache(tty_path) if tty_path else None
     now = time.time()
+    min_prompts = int(os.environ.get("CODEX_PANE_SUMMARY_MIN_PROMPTS", "5"))
+    min_seconds = int(os.environ.get("CODEX_PANE_SUMMARY_MIN_SECONDS", "300"))
 
     if tty_state:
         tty_summary = tty_state.get("summary")
@@ -315,26 +420,32 @@ def resolve_summary(cwd: Path, quick: bool, ttl_seconds: int, tty_path: str | No
                 return tty_summary.strip()
 
     if tty_path:
-        pid = find_codex_pid_for_tty(tty_path)
-        if pid is not None:
-            session_path = session_path_from_pid(pid)
+        process = find_llm_process_for_tty(tty_path)
+        if process is not None:
+            provider, pid = process
+            session_path = session_path_from_pid(pid, provider)
         if session_path is None and tty_state:
             cached_session_path = tty_state.get("session_path")
             if isinstance(cached_session_path, str) and cached_session_path:
                 cached_path = Path(cached_session_path)
                 if cached_path.exists():
                     session_path = cached_path
+                    provider = tty_state.get("provider")
 
     if session_path is None:
-        session_path = find_latest_session(cwd)
+        latest = find_latest_session(cwd)
+        if latest is not None:
+            provider, session_path = latest
 
     if not session_path:
         return f"Codex: {repo_name(cwd)}"
 
-    context = load_session_context(session_path)
+    provider = provider or ("claude" if "/.claude/" in str(session_path) else "codex")
+    context = load_claude_session_context(session_path) if provider == "claude" else load_session_context(session_path)
     fallback = heuristic_summary(cwd, context)
     digest = context_hash(cwd, context, session_path)
     cached = read_cache(cwd)
+    user_count = int(context.get("user_count", 0))
 
     if cached and cached.get("digest") == digest:
         summary = cached.get("summary")
@@ -346,12 +457,23 @@ def resolve_summary(cwd: Path, quick: bool, ttl_seconds: int, tty_path: str | No
     if quick:
         return fallback
 
+    if cached:
+        summary = cached.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            age = now - float(cached.get("updated_at", 0))
+            previous_user_count = int(cached.get("user_count", 0))
+            prompts_since_refresh = max(0, user_count - previous_user_count)
+            if prompts_since_refresh < min_prompts and age < min_seconds:
+                return summary.strip()
+
     summary = generate_llm_summary(cwd, context) or fallback
     payload = {
         "summary": summary,
         "digest": digest,
         "updated_at": now,
         "session_path": str(session_path),
+        "provider": provider,
+        "user_count": user_count,
     }
     write_cache(cwd, payload)
     if tty_path:
@@ -390,7 +512,7 @@ def main() -> int:
     parser.add_argument("--tty")
     parser.add_argument("--watch", action="store_true")
     parser.add_argument("--quick", action="store_true")
-    parser.add_argument("--interval", type=int, default=4)
+    parser.add_argument("--interval", type=int, default=15)
     parser.add_argument("--ttl", type=int, default=120)
     args = parser.parse_args()
 

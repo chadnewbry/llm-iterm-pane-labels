@@ -3,6 +3,7 @@ autoload -Uz add-zsh-hook
 
 export CODEX_PANE_SUMMARY_SCRIPT="$HOME/.codex/codex_pane_summary.py"
 typeset -g _CODEX_PANE_WATCHER_PID=""
+: "${CODEX_PANE_SUMMARY_POLL_INTERVAL:=15}"
 
 _it2_b64() {
   printf '%s' "$1" | base64 | tr -d '\n'
@@ -136,23 +137,49 @@ _codex_pane_watcher_start() {
   [[ "$tty_path" == /dev/* ]] || return
 
   _codex_pane_watcher_stop
-  python3 "$CODEX_PANE_SUMMARY_SCRIPT" --cwd "$PWD" --tty "$tty_path" --watch --interval 4 >/dev/null 2>&1 &
+  python3 "$CODEX_PANE_SUMMARY_SCRIPT" --cwd "$PWD" --tty "$tty_path" --watch --interval "$CODEX_PANE_SUMMARY_POLL_INTERVAL" >/dev/null 2>&1 &
   _CODEX_PANE_WATCHER_PID=$!
 }
 
-codex() {
+_llm_pane_watcher_start_for_agent() {
   _pane_task_refresh
   _codex_pane_watcher_start
-  command codex "$@"
-  local exit_code=$?
+}
+
+_llm_pane_watcher_stop_for_agent() {
+  local exit_code=$1
   _codex_pane_watcher_stop
   _pane_task_refresh
   return $exit_code
+}
+
+codex() {
+  _llm_pane_watcher_start_for_agent
+  command codex "$@"
+  local exit_code=$?
+  _llm_pane_watcher_stop_for_agent $exit_code
+}
+
+claude() {
+  _llm_pane_watcher_start_for_agent
+  command claude "$@"
+  local exit_code=$?
+  _llm_pane_watcher_stop_for_agent $exit_code
+}
+
+cc() {
+  _llm_pane_watcher_start_for_agent
+  command claude "$@"
+  local exit_code=$?
+  _llm_pane_watcher_stop_for_agent $exit_code
 }
 
 cx() {
   local summary="$1"
   shift
   pane_task "$summary"
-  codex "$@"
+  _pane_task_refresh
+  command codex "$@"
+  local exit_code=$?
+  _llm_pane_watcher_stop_for_agent $exit_code
 }
